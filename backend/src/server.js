@@ -1,5 +1,7 @@
 const express = require("express");
 
+const jobRoutes = require("./routes/jobRoutes");
+
 const app = express();
 
 const PORT = 5000;
@@ -17,6 +19,8 @@ app.get("/health", (req, res) => {
     status: "healthy",
   });
 });
+
+app.use("/api/jobs", jobRoutes);
 
 app.listen(PORT, () => {
   console.log(`JobFlow API running on http://localhost:${PORT}`);
