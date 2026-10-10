@@ -66,8 +66,22 @@ async function getJob(req, res) {
   }
 }
 
+async function retryJob(req, res) {
+  try {
+    const job = await jobService.retryJob(req.params.id);
+    return res.json(job);
+  } catch (error) {
+    console.error("Retry job error:", error.message);
+
+    return res.status(error.statusCode || 500).json({
+      error: error.statusCode ? error.message : "Failed to retry job",
+    });
+  }
+}
+
 module.exports = {
   createJob,
   getJobs,
   getJob,
+  retryJob,
 };
