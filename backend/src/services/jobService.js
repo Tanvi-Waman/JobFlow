@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const jobQueue = require("../queues/jobQueue");
 
 async function createJob(data) {
   const job = await prisma.job.create({
@@ -10,7 +11,39 @@ async function createJob(data) {
     },
   });
 
-  return job;
+  try {
+    await jobQueue.add(
+      job.type,
+      {
+        jobId: job.id,
+        type: job.type,
+        payload: job.payload,
+      },
+      {
+        attempts: job.maxAttempts,
+        backoff: {
+          type: "exponential",
+          delay: 1000,
+        },
+        priority: job.priority === "high" ? 1 : job.priority === "low" ? 10 : 5,
+        removeOnComplete: 100,
+        removeOnFail: false,
+      },
+    );
+
+    return job;
+  } catch (error) {
+    await prisma.job.update({
+      where: { id: job.id },
+      data: {
+        status: "failed",
+        failedAt: new Date(),
+        errorMessage: `Queueing failed: ${error.message}`,
+      },
+    });
+
+    throw error;
+  }
 }
 
 async function getAllJobs() {
