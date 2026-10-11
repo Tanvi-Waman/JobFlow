@@ -4,8 +4,6 @@ const jobRoutes = require("./routes/jobRoutes");
 
 const app = express();
 
-const PORT = 5000;
-
 app.use(express.json());
 
 app.get("/", (req, res) => {
@@ -22,6 +20,12 @@ app.get("/health", (req, res) => {
 
 app.use("/api/jobs", jobRoutes);
 
-app.listen(PORT, () => {
-  console.log(`JobFlow API running on http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  const PORT = process.env.PORT || 5000;
+
+  app.listen(PORT, () => {
+    console.log(`JobFlow API running on https://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;

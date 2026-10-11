@@ -33,9 +33,7 @@ async function processJob(job) {
       }
 
       console.log(`Simulating email to: ${payload.to}`);
-
       await new Promise((resolve) => setTimeout(resolve, 2000));
-
       console.log("Email simulation completed");
     } else {
       throw new Error(`Unsupported job type: ${type}`);
@@ -46,6 +44,7 @@ async function processJob(job) {
       data: {
         status: "completed",
         completedAt: new Date(),
+        failedAt: null,
         errorMessage: null,
       },
     });
@@ -55,20 +54,18 @@ async function processJob(job) {
     return { success: true, jobId };
   } catch (error) {
     const totalAttempts = job.opts.attempts || 1;
-    const finalAttempts = job.attemptsMade + 1 >= totalAttempts;
+    const finalAttempt = job.attemptsMade + 1 >= totalAttempts;
+
+    console.error(`Job attempt failed: ${jobId}`, error.message);
 
     await prisma.job.update({
-      where: {
-        id: jobId,
-      },
+      where: { id: jobId },
       data: {
         status: finalAttempt ? "failed" : "queued",
         failedAt: finalAttempt ? new Date() : null,
         errorMessage: error.message,
       },
     });
-
-    console.error(`Job attempt failed: ${jobId}`, error.message);
 
     throw error;
   }
@@ -80,7 +77,32 @@ const worker = new Worker("jobflow-queue", processJob, {
 });
 
 worker.on("completed", (job) => {
+  console.log(`BullMQ job ${job.id} completed successfully`);
+});
+
+worker.on("failed", async (job, error) => {
   console.error(`BullMQ job ${job?.id} failed: ${error.message}`);
+
+  if (!job) return;
+
+  const totalAttempts = job.opts.attempts || 1;
+
+  if (job.attemptsMade >= totalAttempts) {
+    try {
+      await prisma.job.update({
+        where: { id: job.data.jobId },
+        data: {
+          status: "failed",
+          failedAt: new Date(),
+          errorMessage: error.message,
+        },
+      });
+
+      console.log(`Database status set to failed: ${job.data.jobId}`);
+    } catch (dbError) {
+      console.error("Failed to update final job status:", dbError);
+    }
+  }
 });
 
 worker.on("error", (error) => {
@@ -97,6 +119,3 @@ async function shutdown() {
 
   process.exit(0);
 }
-
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);

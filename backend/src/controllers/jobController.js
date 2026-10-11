@@ -6,7 +6,7 @@ async function createJob(req, res) {
 
     if (!type) {
       return res.status(400).json({
-        error: "Job Type is required",
+        error: "Job type is required",
       });
     }
 
