@@ -12,33 +12,46 @@ const connection = {
 async function processJob(job) {
   const { jobId, type, payload } = job.data;
 
-  console.log(`Starting job: ${jobId}`);
-  console.log(`Job type: ${type}`);
-  console.log(`Attempt: ${job.attemptsMade + 1}`);
+  const totalAttempts = job.opts.attempts || 1;
+  const currentAttempt = job.attemptsMade + 1;
+  const isFinalAttempt = currentAttempt >= totalAttempts;
 
-  await prisma.job.update({
-    where: { id: jobId },
-    data: {
-      status: "processing",
-      startedAt: new Date(),
-      errorMessage: null,
-      attempts: { increment: 1 },
-    },
-  });
+  console.log("-----------------------------------");
+  console.log(`Job ID: ${jobId}`);
+  console.log(`Type: ${type}`);
+  console.log(`Attempt: ${currentAttempt}/${totalAttempts}`);
 
   try {
+    // Mark the job as processing.
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: "processing",
+        startedAt: new Date(),
+        completedAt: null,
+        failedAt: null,
+        attempts: currentAttempt,
+        errorMessage: null,
+      },
+    });
+
+    // Process supported job types.
     if (type === "email") {
       if (!payload || !payload.to) {
         throw new Error("Email recipient is required");
       }
 
       console.log(`Simulating email to: ${payload.to}`);
+
+      // Simulate background work.
       await new Promise((resolve) => setTimeout(resolve, 2000));
+
       console.log("Email simulation completed");
     } else {
       throw new Error(`Unsupported job type: ${type}`);
     }
 
+    // Save successful completion.
     await prisma.job.update({
       where: { id: jobId },
       data: {
@@ -53,20 +66,27 @@ async function processJob(job) {
 
     return { success: true, jobId };
   } catch (error) {
-    const totalAttempts = job.opts.attempts || 1;
-    const finalAttempt = job.attemptsMade + 1 >= totalAttempts;
+    console.error(`Job attempt failed: ${jobId}`);
+    console.error(error.message);
 
-    console.error(`Job attempt failed: ${jobId}`, error.message);
+    // Intermediate failures can be retried by BullMQ.
+    // The last failed attempt should remain failed.
+    try {
+      await prisma.job.update({
+        where: { id: jobId },
+        data: {
+          status: isFinalAttempt ? "failed" : "queued",
+          failedAt: isFinalAttempt ? new Date() : null,
+          completedAt: null,
+          attempts: currentAttempt,
+          errorMessage: error.message,
+        },
+      });
+    } catch (dbError) {
+      console.error("Could not update job status:", dbError.message);
+    }
 
-    await prisma.job.update({
-      where: { id: jobId },
-      data: {
-        status: finalAttempt ? "failed" : "queued",
-        failedAt: finalAttempt ? new Date() : null,
-        errorMessage: error.message,
-      },
-    });
-
+    // Important: rethrow so BullMQ can perform its retry logic.
     throw error;
   }
 }
@@ -87,6 +107,7 @@ worker.on("failed", async (job, error) => {
 
   const totalAttempts = job.opts.attempts || 1;
 
+  // Ensure the database shows the final failure after all retries.
   if (job.attemptsMade >= totalAttempts) {
     try {
       await prisma.job.update({
@@ -94,13 +115,15 @@ worker.on("failed", async (job, error) => {
         data: {
           status: "failed",
           failedAt: new Date(),
+          completedAt: null,
+          attempts: job.attemptsMade,
           errorMessage: error.message,
         },
       });
 
-      console.log(`Database status set to failed: ${job.data.jobId}`);
+      console.log(`Final failure saved: ${job.data.jobId}`);
     } catch (dbError) {
-      console.error("Failed to update final job status:", dbError);
+      console.error("Failed to save final status:", dbError.message);
     }
   }
 });
@@ -119,3 +142,6 @@ async function shutdown() {
 
   process.exit(0);
 }
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
